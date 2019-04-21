@@ -17,9 +17,9 @@
 //--------------------------------------------------------------------------------
 //! \file    ED4_BMS_dfs.h
 //! \brief   Definitions and structures for the BMS module.
-//! \date    2018-April
+//! \date    2018-September
 //! \author  MyLab-odyssey
-//! \version 0.4.3
+//! \version 0.5.5
 //--------------------------------------------------------------------------------
 #ifndef BMS_ED4_DFS_H
 #define BMS_ED4_DFS_H
@@ -30,19 +30,21 @@
 #define RAW_VOLTAGES 0           //!< Use RAW values or calc with ADC resolution 
 #define IQR_FACTOR 1.5           //!< Factor to define Outliners-Range, 1.5 for suspected outliners, 3 for definitive outliners
 
-const char* const PROGMEM EVMODES[] ={"HV OFF", "slow CHG", "fast CHG", "HV ON"};
-const char* const PROGMEM CAPMODES[] ={"As/10", "As/100"};
+const char* const PROGMEM EVMODES[] = {"HV OFF", "slow CHG", "CHG", "HV ON", "", "CHG"};
+const char* const PROGMEM CAPMODES[] = {"dSOC", "CONT"};
+const char* const PROGMEM BATTCOOL[] = {"?","-","-","W","W+AC"};
+const char* const PROGMEM BATTHEAT[] = {"?","-","-","-","W+PTC"};
 
 //Data structure for statistics (min, mean, max values, percentiles)
 template<typename T>
 struct Stats_t{
   int16_t min;                  //!< minimum
-  byte p25_out_count;            //!< count of datasets below p25, including mininal value
+  byte p25_out_count;           //!< count of datasets below p25, including mininal value
   int16_t p25;                  //!< 25th percentile
-  T mean;                        //!< average 
+  T mean;                       //!< average 
   int16_t median;               //!< 50th percentile
   int16_t p75;                  //!< 75th percentile
-  byte p75_out_count;            //!< count of datasets above p75, including maximum value
+  byte p75_out_count;           //!< count of datasets above p75, including maximum value
   int16_t max;                  //!< maximum
 };
 
@@ -89,7 +91,7 @@ typedef struct {
   float LV;                      //!< 12V onboard voltage / LV system
   byte LV_DCDC_amps;             //!< current of DC/DC LV system, not 12V battery!
   byte LV_DCDC_load;             //!< load in % of DC/DC LV system, not 12V battery!
-  byte LV_DCDC_power;            //!< power in W (x/10) of DC/DC LV system, not 12V battery!
+  byte LV_DCDC_power;            //!< power in W (x/10) of DC/DC output of LV system, not 12V battery!
   byte LV_DCDC_state;            //!< DC/DC state
 
   Power_t<int16_t> BattPower;    //!< Actual sampled power values
@@ -101,15 +103,16 @@ typedef struct {
   uint16_t LastMeas_days;        //!< days elapsed since last successful measurement
   
   Stats_t<float> Cvolts;         //!< calculated statistics from individual cell voltage query              
-  int16_t CV_min_at;             //!< cell number with voltage mininum in pack
-  int16_t CV_max_at;             //!< cell number with voltage maximum in pack
+  uint16_t CV_min_at;            //!< cell number with voltage mininum in pack
+  uint16_t CV_max_at;            //!< cell number with voltage maximum in pack
   float Cvolts_stdev;            //!< calculated standard deviation (populated)
   
   Stats_t<float> Ccap_As;        //!< cell capacity statistics calculated from individual cell data
-  uint16_t CAP2_mean;             //!< cap mean from impedance track cap measurement
-  uint16_t CAPusable_max;         //!< usable Ah by latest charge (As/10)
-  uint16_t CAP_min_at;            //!< cell number with capacity mininum in pack
-  uint16_t CAP_max_at;            //!< cell number with capacity maximum in pack
+  uint16_t CAP2_mean;            //!< cap mean from impedance track cap measurement
+  byte CAP_factor = 1;           //!< factor to compensate As/100 measurements
+  uint16_t CAPusable_max;        //!< usable Ah by latest charge (As/10)
+  uint16_t CAP_min_at;           //!< cell number with capacity mininum in pack
+  uint16_t CAP_max_at;           //!< cell number with capacity maximum in pack
   
   uint16_t CapInit;              //!< battery initial capacity (x/16) in As/10 at a certain/defined temperature maybe 45 degC
   uint16_t CapMeas;              //!< battery capacity measured in As/10
@@ -122,7 +125,8 @@ typedef struct {
   byte ProdMonth;                //!< month of battery production
   byte ProdYear;                 //!< year of battery production
   
-  float SOC;                     //!< State of Charge, as displayed in dash (x/50)
+  float SOC;                     //!< State of Charge, reported by BMS (x/50)
+  float SOC_EVC;                 //!< State of Charge, as displayed in dash (x/50)
   byte SOCrecalState;            //!< State of SOC recal (experimental, tbd)
   
   byte fSOH;                     //!< Flag showing if degraded cells are found, or battery failiure present 
@@ -166,9 +170,7 @@ const PROGMEM byte rqBattOCV_Cal[2]               = {0x21, 0x05};
 const PROGMEM byte rqBattCellResistance_P1[2]     = {0x21, 0x10};
 const PROGMEM byte rqBattCellResistance_P2[2]     = {0x21, 0x11};
 const PROGMEM byte rqBattIsolation[2]             = {0x21, 0x29}; 
-const PROGMEM byte rqBattMeas_Capacity[2]         = {0x21, 0x0B};
-const PROGMEM byte rqBattProdDate[3]              = {0x22, 0x03, 0x04}; 
-const PROGMEM byte rqBattCapInit[3]               = {0x22, 0x03, 0x05}; 
+const PROGMEM byte rqBattMeas_Capacity[2]         = {0x21, 0x0B}; 
 const PROGMEM byte rqBattSN[2]                    = {0x21, 0xA0};
 const PROGMEM byte rqBattCapacity_dSOC_P1[2]      = {0x21, 0x12}; 
 const PROGMEM byte rqBattCapacity_dSOC_P2[2]      = {0x21, 0x13}; 
@@ -176,6 +178,7 @@ const PROGMEM byte rqBattCapacity_P1[2]           = {0x21, 0x14};
 const PROGMEM byte rqBattCapacity_P2[2]           = {0x21, 0x15};
 const PROGMEM byte rqBattBalancing[2]             = {0x21, 0x16}; 
 const PROGMEM byte rqBattLogData_P1[2]            = {0x21, 0x30};
+const PROGMEM byte rqBattProdDate[3]              = {0x22, 0x03, 0x04};
 
 const PROGMEM uint32_t rqID_DASH                  = 0x743;
 const PROGMEM uint32_t respID_DASH                = 0x763; 
@@ -184,6 +187,7 @@ const PROGMEM byte rqDashTemperature[3]           = {0x22, 0x20, 0x0C};
 
 const PROGMEM uint32_t rqID_EVC                   = 0x7E4;
 const PROGMEM uint32_t respID_EVC                 = 0x7EC;
+const PROGMEM byte rqSOC_EVC[3]                   = {0x22, 0x20, 0x02};
 const PROGMEM byte rqKeyState[3]                  = {0x22, 0x20, 0x0E};
 const PROGMEM byte rqDCDC_State[3]                = {0x22, 0x30, 0x2A};
 const PROGMEM byte rqDCDC_Load[3]                 = {0x22, 0x34, 0x95};
@@ -192,6 +196,7 @@ const PROGMEM byte rqDCDC_Power[3]                = {0x22, 0x34, 0x94};
 const PROGMEM byte rqHV_Energy[3]                 = {0x22, 0x32, 0x0C}; //usable energy kWh
 const PROGMEM byte rqEV_ChgLog_P1[3]              = {0x22, 0x33, 0xD4};
 const PROGMEM byte rqEV_Range[3]                  = {0x22, 0x34, 0x51};
-
+const PROGMEM byte rqEV_BattCooling[3]            = {0x22, 0x34, 0xA7};
+const PROGMEM byte rqEV_BattHeating[3]            = {0x22, 0x34, 0xA8};
 
 #endif // of #ifndef BMS_ED4_DFS_H

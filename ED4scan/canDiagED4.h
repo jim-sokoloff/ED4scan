@@ -17,9 +17,9 @@
 //--------------------------------------------------------------------------------
 //! \file    canDiagED4.h
 //! \brief   Library module for retrieving diagnostic data. 
-//! \date    2018-April
+//! \date    2018-September
 //! \author  MyLab-odyssey
-//! \version 0.4.3
+//! \version 0.5.5
 //--------------------------------------------------------------------------------
 #ifndef CANDIAG_H
 #define CANDIAG_H
@@ -39,7 +39,10 @@
 #endif
 
 #define VERBOSE_ENABLE 1         //!< Local verbose mode enable to allow output of CAN messages
-#define CAP_MODE 2               //!< Select used default capacity readout: 1 = dSOC in As/10, 2 = impedance meas. in As/100
+#define CAP_MODE 2               //!< Select used default capacity readout method: 1 = dSOC, 2 = by impedance meas.
+
+#define CS      10               //!< chip select pin of MCP2515 CAN-Controller
+#define MCP_INT 2                //!< Interrupt pin (low-active) used to detect CAN messages in buffer of MCP2515
 
 #include <mcp_can.h>
 #include <Timeout.h>
@@ -109,7 +112,6 @@ public:
     void setCAN_Filter(unsigned long filter);
     void setCAN_ID(unsigned long _respID);
     void setCAN_ID(unsigned long _rqID, unsigned long _respID);
-    void setCAN_Filter_DRV();
 
 //--------------------------------------------------------------------------------
 //! \brief   Get methods for BMS data
@@ -118,7 +120,7 @@ public:
     boolean getDCDC_State(BatteryDiag_t *myBMS, boolean debug_verbose);
     boolean getBatteryTemperature(BatteryDiag_t *myBMS, boolean debug_verbose);
     boolean getBatteryDate(BatteryDiag_t *myBMS, boolean debug_verbose);
-    boolean getBatteryVIN(BatteryDiag_t *myBMS, boolean debug_verbose);
+    //boolean getBatteryVIN(BatteryDiag_t *myBMS, boolean debug_verbose);
     boolean getBalancingStatus(BatteryDiag_t *myBMS, boolean debug_verbose);
     boolean getIsolationValue(BatteryDiag_t *myBMS, boolean debug_verbose);
     boolean getBatteryCapacity(BatteryDiag_t *myBMS, boolean debug_verbose);
@@ -136,7 +138,6 @@ public:
     boolean printBMSlog(BatteryDiag_t *myBMS, boolean debug_verbose);
     void    printBMSlogSet(byte _length);
     boolean printCHGlog(boolean debug_verbose);
-    boolean getBatteryExperimentalData(BatteryDiag_t *myBMS, boolean debug_verbose);
 
     uint16_t getCellVoltage(byte n);
     uint16_t getCellCapacity(byte n);
@@ -144,7 +145,7 @@ public:
 //--------------------------------------------------------------------------------
 //! \brief   Get methods for OBL data (charger)
 //--------------------------------------------------------------------------------
-    char    OBL_7KW_Installed(ChargerDiag_t *myOBL, boolean debug_verbose);
+    int8_t  OBL_7KW_Installed(ChargerDiag_t *myOBL, boolean debug_verbose);
     boolean getChargerTemperature(ChargerDiag_t *myOBL, boolean debug_verbose);
     boolean getChargerCtrlValues(ChargerDiag_t *myOBL, boolean debug_verbose);
     boolean getChargerDC(ChargerDiag_t *myOBL, boolean debug_verbose);
@@ -163,6 +164,8 @@ public:
     void setCAPmode(byte _mode);
     boolean CalcPower(BatteryDiag_t *myBMS);
     boolean printECUrev(boolean debug_verbose, byte _type[]);
+    int8_t getBattCoolingType(boolean debug_verbose);
+    int8_t getBattHeaterType(boolean debug_verbose);
 };
 
 #endif // of #ifndef CANDIAG_H

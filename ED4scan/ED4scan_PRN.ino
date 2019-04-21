@@ -17,9 +17,9 @@
 //--------------------------------------------------------------------------------
 //! \file    ED4scan_PRN.ino
 //! \brief   Functions for serial printing the datasets
-//! \date    2018-April
+//! \date    2018-September
 //! \author  MyLab-odyssey
-//! \version 0.4.3
+//! \version 0.5.5
 //--------------------------------------------------------------------------------
 
 //--------------------------------------------------------------------------------
@@ -80,7 +80,7 @@ void printWelcomeScreen() {
   do {
     Serial.print('.');
     delay(1000);
-  } while (digitalRead(2));
+  } while (digitalRead(MCP_INT));
   Serial.println(F("CONNECTED"));
   PrintSPACER();
 }
@@ -98,34 +98,33 @@ void printHeaderData() {
 //--------------------------------------------------------------------------------
 void printBatteryProductionData(boolean fRPT) {
   (void) fRPT;  // Avoid unused param warning
-  Serial.print(F("SOH  : ")); Serial.print(BMS.SOH); Serial.print(F("%, "));
+  
+  Serial.print(F("SOH  : ")); Serial.print(BMS.SOH / 2.0, 1); Serial.print(F("%, "));
   if (BMS.fSOH == 0xFF) {
     Serial.println(MSG_OK);
   } else if (BMS.fSOH == 0) {
     Serial.println(F("FAULT"));
   } else {
-    Serial.print(F("DEGRADED")); Serial.print(F(", ")); Serial.println(BMS.fSOH, HEX);
+    Serial.print(F("UNDEF")); Serial.print(F(", ")); Serial.println(BMS.fSOH, HEX);
   }
   Serial.print(F("Y/M/D: ")); Serial.print(2000 + BMS.ProdYear); Serial.print('/');
   Serial.print(BMS.ProdMonth); Serial.print('/'); Serial.println(BMS.ProdDay);
-  byte type[3] = {0x37, 0x38, 0x39};
+  int8_t CStype = DiagCAN.getBattCoolingType(false);
+  Serial.print(F("BCS  : ")); Serial.print((char *) pgm_read_word(BATTCOOL + CStype));
+  CStype = DiagCAN.getBattHeaterType(false);
+  Serial.print(F(", BHS: ")); Serial.println((char *) pgm_read_word(BATTHEAT + CStype));
+  
+  byte type[3] = {0x37, 0x38, 0x39};  //set main descriptor for rev query
   DiagCAN.setCAN_ID(rqID_BMS, respID_BMS);
   DiagCAN.printECUrev(false, type);
-}
-
-//--------------------------------------------------------------------------------
-//! \brief   Output experimental data
-//--------------------------------------------------------------------------------
-void printExperimentalData() {
-  Serial.println(F("*** Experimental Data - NOT VERIFIED ***"));
-  Serial.print(F("SOC recal state      : ")); Serial.println(BMS.SOCrecalState);
 }
 
 //--------------------------------------------------------------------------------
 //! \brief   Output standard dataset
 //--------------------------------------------------------------------------------
 void printStandardDataset() {
-  Serial.print(F("SOC  : ")); Serial.print(BMS.SOC,1); Serial.print(F(" % = "));
+  Serial.print(F("SOC  : ")); Serial.print(BMS.SOC,1); Serial.print(F(", "));
+  Serial.print(BMS.SOC_EVC,1); Serial.print(F(" % = "));
   Serial.print(BMS.Energy / 200.0, 2); Serial.print(F(" kWh = "));
   if (BMS.EVrange < 0x3FF) {
     Serial.print(BMS.EVrange);
@@ -154,7 +153,7 @@ void printStandardDataset() {
   Serial.print(BMS.LV_DCDC_load / 256.0 * 100.0,0); Serial.println(F(" %"));
   Serial.print(F("EV   : "));
   Serial.print((char *) pgm_read_word(ON_OFF + (BMS.KeyState))); Serial.print(F(", ")); 
-  if (BMS.EVmode <= 3) {
+  if (BMS.EVmode <= 3 || BMS.EVmode == 5) {
     Serial.print((char *) pgm_read_word(EVMODES + BMS.EVmode));
   } else {
     Serial.print(BMS.EVmode, HEX);
@@ -185,12 +184,12 @@ void printBMS_CellVoltages() {
 //! \brief   Output BMS capacity estimation
 //--------------------------------------------------------------------------------
 void printBMS_CapacityEstimate() {
-  Serial.print(F("Measured : ")); Serial.print(BMS.CAP2_mean / 36.0, 3); Serial.print(F(", "));
-  Serial.print(BMS.CapMeas / 360.0, 3); Serial.println(F(" (dSOC), "));
+  Serial.print(F("Measured : ")); Serial.print(BMS.CAP2_mean / 360.0, 3); Serial.print(F(", "));
+  Serial.print(BMS.CapMeas / 360.0, 3); Serial.println(F(" (SOH), "));
   Serial.print(F("Estimate : ")); Serial.print(BMS.Cap_combined_quality,3); Serial.print(F(" of ")); 
   Serial.print(BMS.Cap_meas_quality,3); Serial.print(F(", "));
   Serial.print(BMS.LastMeas_days); Serial.println(F(" day(s)"));
-  Serial.print(F("Capacity : ")); Serial.print(BMS.CapInit / 360.0, 3); Serial.print(F(" (INIT), "));
+  Serial.print(F("Capacity : ")); Serial.print(BMS.CapInit / 360.0, 3); Serial.print(F(" (LIM), "));
   Serial.print(BMS.CapEstimate / 360.0, 3); Serial.println(F(" (EST)"));
 }
 
@@ -198,7 +197,7 @@ void printBMS_CapacityEstimate() {
 //! \brief   Output SOH state and capacity estimation
 //--------------------------------------------------------------------------------
 void printBMS_SOHstate() {
-  Serial.print(F("SOH : ")); Serial.print(BMS.SOH); Serial.print(F(" %, "));
+  Serial.print(F("SOH : ")); Serial.print(BMS.SOH / 2.0, 1); Serial.print(F(" %, "));
   Serial.print(BMS.CAPusable_max / 360.0, 3); Serial.println(F(" Ah"));
 }
 
@@ -222,8 +221,12 @@ void printHVcontactorState() {
 //! \brief   Output BMS temperatures
 //--------------------------------------------------------------------------------
 void printBMStemperatures() {
+  Serial.print(F("mean: ")); Serial.print((float) BMS.Temps[2] / 64.0, 0);
+  Serial.print(F(", min : ")); Serial.print((float) BMS.Temps[1] / 64.0, 0);
+  Serial.print(F(", max : ")); Serial.println((float) BMS.Temps[0] / 64.0, 0);
+  
   for (byte n = 3; n < 28; n = n + 9) {
-    Serial.print(F("module ")); Serial.print((n / 9) + 1); Serial.print(F(": "));
+    Serial.print(F("M ")); Serial.print((n / 9) + 1); Serial.print(F(": "));
     for (byte i = 0; i < 9; i++) {
       float temp = BMS.Temps[n + i] / 64.0;
       if (temp >= 0) Serial.print(' ');
@@ -235,9 +238,6 @@ void printBMStemperatures() {
       }
     }
   }
-  Serial.print(F("   mean : ")); Serial.print((float) BMS.Temps[2] / 64.0, 0);
-  Serial.print(F(", min : ")); Serial.print((float) BMS.Temps[1] / 64.0, 0);
-  Serial.print(F(", max : ")); Serial.println((float) BMS.Temps[0] / 64.0, 0);
 }
 
 //--------------------------------------------------------------------------------
@@ -245,16 +245,15 @@ void printBMStemperatures() {
 //--------------------------------------------------------------------------------
 void printIndividualCellData() {
   Serial.print(F("# ;mV  ;As/10"));
-  if (myDevice.CapMeasMode == 2) {
-    Serial.println('0');
+  if (myDevice.CapMeasMode == 1) {
+    Serial.println(F(" dSOC"));
   } else {
     Serial.println();
   }
   for(int16_t n = 0; n < CELLCOUNT; n++){
     if (n < 9) Serial.print('0');
     Serial.print(n+1); Serial.print(F(";")); Serial.print(DiagCAN.getCellVoltage(n));
-    Serial.print(F(";")); Serial.print(DiagCAN.getCellCapacity(n));
-    //Serial.print(F(";")); Serial.print(BMS.BattCV_Bal[n]);
+    Serial.print(F(";")); Serial.print(DiagCAN.getCellCapacity(n) * BMS.CAP_factor);
     Serial.println();
   }
   PrintSPACER(F("Cell Statistics"));
@@ -347,50 +346,77 @@ void printOBL_Status() {
   } else {
     Serial.println(OBL.PilotState, HEX);
   }
-  Serial.print(F("Cable code : ")); 
-  if (OBL.AmpsCableCode > 0) {
-    Serial.print(OBL.AmpsCableCode); Serial.println(F(" Ohm"));
+  if (!FASTCHG) {
+    Serial.print(F("Cable code : ")); 
+    if (OBL.AmpsCableCode > 0) {
+      Serial.print(OBL.AmpsCableCode); Serial.println(F(" Ohm"));
+    } else {
+      Serial.println('-');
+    }
+    Serial.print(F("Charger max: ")); Serial.print(OBL.Amps_setpoint); Serial.print(F(" A, State: "));
+    if (OBL.ChargerState <= 4) {
+      Serial.println((char *) pgm_read_word(OBL_STATE + (OBL.ChargerState / 2)));
+    } else {
+      Serial.println(OBL.ChargerState, HEX);
+    }
+    Serial.print(F("AC L1: ")); Serial.print(OBL.MainsVoltage[0] / 10.0, 1); Serial.print(F(" V, "));
+    Serial.print((OBL.MainsAmps[0] + OBL.MainsAmps[1]) / 10.0, 1); Serial.print(F(" A, "));
+    Serial.print(OBL.MainsFreq, 1); Serial.println(F(" Hz"));
+    Serial.print(F("AC R1: ")); Serial.print(OBL.CHGpower[0] / 2000.0, 2); Serial.print(F(" kW, R2: "));
+    Serial.print(OBL.CHGpower[1] / 2000.0, 2); Serial.print(F(" kW, max: "));
+    Serial.print(OBL.CHGpower[2] / 64.0, 2); Serial.println(F(" kW"));
   } else {
-    Serial.println('-');
+    Serial.print(F("Charger max: ")); Serial.print(OBL.Amps_setpoint); Serial.print(F(" A, State: "));
+    Serial.println((char *) pgm_read_word(OBL_STATE + (OBL.ChargerState)));
+    Serial.print(F("AC L1-2-3: ")); Serial.print(OBL.MainsVoltage[0] / 2.0, 1); Serial.print(F(", "));
+    Serial.print(OBL.MainsVoltage[1] / 2.0, 1); Serial.print(F(", "));
+    Serial.print(OBL.MainsVoltage[2] / 2.0, 1); Serial.println(F(" V"));
+    Serial.print(F("           ")); Serial.print(OBL.MainsAmps[0] / 10.0, 1); Serial.print(F(", "));
+    Serial.print(OBL.MainsAmps[1] / 10.0, 1); Serial.print(F(", "));
+    Serial.print(OBL.MainsAmps[2] / 10.0, 1); Serial.print(F(" A; "));
+    Serial.print(OBL.CHGpower[0] / 1000.0, 3); Serial.println(F(" kW"));
   }
-  Serial.print(F("Charger max: ")); Serial.print(OBL.Amps_setpoint); Serial.print(F(" A, State: "));
-  if (OBL.ChargerState <= 4) {
-    Serial.println((char *) pgm_read_word(OBL_STATE + (OBL.ChargerState / 2)));
-  } else {
-    Serial.println(OBL.ChargerState, HEX);
-  }
-  Serial.print(F("AC L1: ")); Serial.print(OBL.MainsVoltage[0] / 10.0, 1); Serial.print(F(" V, "));
-  Serial.print((OBL.MainsAmps[0] + OBL.MainsAmps[1]) / 10.0, 1); Serial.print(F(" A, "));
-  Serial.print(OBL.MainsFreq, 1); Serial.println(F(" Hz"));
-  Serial.print(F("AC R1: ")); Serial.print(OBL.CHGpower[0] / 2000.0, 2); Serial.print(F(" kW, R2: "));
-  Serial.print(OBL.CHGpower[1] / 2000.0, 2); Serial.print(F(" kW, max: "));
-  Serial.print(OBL.CHGpower[2] / 64.0, 2); Serial.println(F(" kW"));
   Serial.print(F("DC HV: ")); Serial.print(OBL.DC_HV / 10.0, 1); Serial.print(F(" V, "));
-  Serial.print(OBL.DC_Current / 10.0, 1); Serial.println(F(" A"));
-  Serial.print(F("DC LV: ")); Serial.print(OBL.LV / 100.0, 1); Serial.println(F(" V"));
+  Serial.print(OBL.DC_Current / 10.0, 2); Serial.println(F(" A"));
+  if (!FASTCHG) {
+    Serial.print(F("DC LV: ")); Serial.print(OBL.LV / 100.0, 1); Serial.println(F(" V"));
+  } else {
+    Serial.print(F("DC LV: ")); Serial.print(OBL.LV / 64.0, 1); Serial.println(F(" V"));
+  }
 }
 
 //--------------------------------------------------------------------------------
 //! \brief   Output OBL charger temperatures
 //--------------------------------------------------------------------------------
 void printOBLtemperatures() {
-  Serial.print(F("In     : ")); 
-  if (OBL.InTemp < 0xFF) {
-    Serial.println(OBL.InTemp - TEMP_OFFSET, DEC);
+  if (!FASTCHG) {
+    Serial.print(F("In     : ")); 
+    if (OBL.InTemp < 0xFF) {
+      Serial.println(OBL.InTemp - TEMP_OFFSET, DEC);
+    } else {
+      Serial.println('-');
+    }
   } else {
-    Serial.println('-');
+    Serial.print(F("System : ")); Serial.print(OBL.SysTemp, DEC); Serial.println(F(" %"));
   }
-  Serial.print(F("Intern.: ")); 
-  if (OBL.InternalTemp < 0xFF) {
-    Serial.println(OBL.InternalTemp - TEMP_OFFSET, DEC);
+  if (!FASTCHG) {
+    Serial.print(F("Intern.: ")); 
+    if (OBL.InternalTemp < 0xFF) {
+      Serial.println(OBL.InternalTemp - TEMP_OFFSET, DEC);
+    } else {
+      Serial.println('-');
+    }
+    Serial.print(F("Out    : ")); 
+    if (OBL.OutTemp < 0xFF) {
+      Serial.println(OBL.OutTemp - TEMP_OFFSET, DEC);
+    } else {
+      Serial.println('-');
+    }
   } else {
-    Serial.println('-');
-  }
-  Serial.print(F("Out    : ")); 
-  if (OBL.OutTemp < 0xFF) {
-    Serial.println(OBL.OutTemp - TEMP_OFFSET, DEC);
-  } else {
-    Serial.println('-');
+    Serial.print(F("Hotspot: ")); 
+    if (OBL.InternalTemp < 0xFF) {
+      Serial.println(OBL.InternalTemp - TEMP_OFFSET + 10, DEC);
+    }
   }
   Serial.print(F("Coolant: ")); 
   if (OBL.OutTemp < 0xFF) {
@@ -448,7 +474,6 @@ void printSplashScreen() {
 //--------------------------------------------------------------------------------
 void printBMSdata() {
   Serial.println(MSG_OK);
-  digitalWrite(CS, HIGH);
   PrintSPACER(F("BMS Status"));
   printHeaderData();
   PrintSPACER();
@@ -474,10 +499,6 @@ void printBMSdata() {
     printVoltageDistribution();           //Print statistic data as boxplot
     PrintSPACER();
   }
-  if (EXPDATA) {
-    printExperimentalData();
-    PrintSPACER();
-  }
 }
 
 //--------------------------------------------------------------------------------
@@ -485,7 +506,6 @@ void printBMSdata() {
 //--------------------------------------------------------------------------------
 void printOBLdata() {
   Serial.println(MSG_OK);
-  digitalWrite(CS, HIGH);
   PrintSPACER(F("OBC Status"));
   printOBL_Status();
   PrintSPACER(F("OBC T/degC"));
@@ -498,7 +518,6 @@ void printOBLdata() {
 //--------------------------------------------------------------------------------
 void printTCUdata() {
   Serial.println(MSG_OK);
-  digitalWrite(CS, HIGH);
   PrintSPACER(F("TCU Status"));
   printTCU_Status();
   PrintSPACER();
@@ -516,7 +535,7 @@ void printBMSall() {
   for (byte i = 0; i < BMSCOUNT; i++) {
     selected[i] = i;
   }
-  Serial.print(F("Reading data"));
+  Serial.print(MSG_READ);
   myDevice.progress = true;
   getState_BMS(selected, BMSCOUNT);
   
@@ -545,7 +564,7 @@ void printBMSall() {
 //! \brief   Get all OBL data and output them
 //--------------------------------------------------------------------------------
 void printOBLall() {
-  Serial.print(F("Reading data"));
+  Serial.print(MSG_READ);
   if (getOBLdata()) {
     printOBLdata();
   } else {
@@ -558,7 +577,7 @@ void printOBLall() {
 //! \brief   Get all Cooling- and Subsystem data and output them
 //--------------------------------------------------------------------------------
 void printTCUall() {
-  Serial.print(F("Reading data"));
+  Serial.print(MSG_READ);
   if (getTCUdata()) {
     printTCUdata();
   } else {
@@ -566,4 +585,3 @@ void printTCUall() {
     Serial.println(FAILURE);
   }
 }
-

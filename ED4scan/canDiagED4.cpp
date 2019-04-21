@@ -17,9 +17,9 @@
 //--------------------------------------------------------------------------------
 //! \file    canDiagED4.cpp
 //! \brief   Library module for retrieving diagnostic data.
-//! \date    2018-April
+//! \date    2018-September
 //! \author  MyLab-odyssey
-//! \version 0.4.3
+//! \version 0.5.5
 //--------------------------------------------------------------------------------
 #include "canDiagED4.h"
 
@@ -118,20 +118,6 @@ void canDiag::setCAN_Filter(unsigned long filter) {
   myCAN0->init_Filt(3, 0, filter);
   myCAN0->init_Filt(4, 0, filter);
   myCAN0->init_Filt(5, 0, filter);
-  //delay(100);
-  myCAN0->setMode(MCP_NORMAL);                     // Set operation mode to normal so the MCP2515 sends acks to received data.
-}
-
-
-void canDiag::setCAN_Filter_DRV() {
-  myCAN0->init_Mask(0, 0, 0x07FF0000);
-  myCAN0->init_Mask(1, 0, 0x07FF0000);
-  myCAN0->init_Filt(0, 0, 0x02000000);
-  myCAN0->init_Filt(1, 0, 0x03180000);
-  myCAN0->init_Filt(2, 0, 0x03CE0000);
-  myCAN0->init_Filt(3, 0, 0x03F20000);
-  myCAN0->init_Filt(4, 0, 0x03D70000);
-  myCAN0->init_Filt(5, 0, 0x05040000);
   //delay(100);
   myCAN0->setMode(MCP_NORMAL);                     // Set operation mode to normal so the MCP2515 sends acks to received data.
 }
@@ -239,7 +225,7 @@ uint16_t canDiag::Get_RequestResponse() {
 
   do {
     //--- Read Frames ---
-    if (!digitalRead(2))                        // If pin 2 is LOW, read receive buffer
+    if (!digitalRead(MCP_INT))                        // If pin 2 is LOW, read receive buffer
     {
       do {
         myCAN0->readMsgBuf(&rxID, &len, rxBuf);    // Read data: len = data length, buf = data byte(s)
@@ -272,7 +258,7 @@ uint16_t canDiag::Get_RequestResponse() {
             fDataOK = Read_FC_Response(items - 6);
           }
         }
-      } while (!digitalRead(2) && !myCAN_Timeout->Expired(false) && !fDataOK);
+      } while (!digitalRead(MCP_INT) && !myCAN_Timeout->Expired(false) && !fDataOK);
     }
   } while (!myCAN_Timeout->Expired(false) && !fDataOK);
 
@@ -305,7 +291,7 @@ boolean canDiag::Read_FC_Response(int16_t items) {
 
   do {
     //--- Read Frames ---
-    if (!digitalRead(2))                        // If pin 2 is LOW, read receive buffer
+    if (!digitalRead(MCP_INT))                        // If pin 2 is LOW, read receive buffer
     {
       do {
         myCAN0->readMsgBuf(&rxID, &len, rxBuf);    // Read data: len = data length, buf = data byte(s)
@@ -331,7 +317,7 @@ boolean canDiag::Read_FC_Response(int16_t items) {
             n = n + 7;
           }
         }
-      } while (!digitalRead(2) && !myCAN_Timeout->Expired(false) && items > 0);
+      } while (!digitalRead(MCP_INT) && !myCAN_Timeout->Expired(false) && items > 0);
     }
   } while (!myCAN_Timeout->Expired(false) && items > 0);
   if (!myCAN_Timeout->Expired(false)) {
@@ -377,7 +363,7 @@ void canDiag::PrintReadBuffer(uint16_t lines) {
 //! \brief   Cleanup after switching filters
 //--------------------------------------------------------------------------------
 boolean canDiag::ClearReadBuffer() {
-  if (!digitalRead(2)) {                       // still messages? pin 2 is LOW, clear the two rxBuffers by reading
+  if (!digitalRead(MCP_INT)) {                       // still messages? pin 2 is LOW, clear the two rxBuffers by reading
     for (byte i = 1; i <= 2; i++) {
       myCAN0->readMsgBuf(&rxID, &len, rxBuf);
     }
@@ -481,8 +467,8 @@ void canDiag::ReadBatteryTemperatures(BatteryDiag_t *myBMS, byte data_in[], uint
   for (uint16_t n = 0; n < (length * 2); n = n + 2) {
     int16_t value = data_in[n + highOffset] * 256 + data_in[n + highOffset + 1];
     if (n > 4) {
-      if (value >> 11) {
-        //value = (value | 0xF700); //make negative
+      //Test for negative min. module temperature and apply offset
+      if (myBMS->Temps[1] & 0x8000) {
         value = value - 0xA00; //minus offset
       }
     }
@@ -583,11 +569,12 @@ boolean canDiag::getBatteryDate(BatteryDiag_t *myBMS, boolean debug_verbose) {
 //! \param   enable verbose / debug output (boolean)
 //! \return  report success (boolean)
 //--------------------------------------------------------------------------------
-boolean canDiag::getBatteryVIN(BatteryDiag_t *myBMS, boolean debug_verbose) {
-  (void) myBMS;
-  uint16_t items = 0;
 
-  this->setCAN_ID(0x7E7, 0x7EF);
+/*boolean canDiag::getBatteryVIN(BatteryDiag_t *myBMS, boolean debug_verbose) {
+
+  uint16_t items;
+
+  this->setCAN_ID(0x7E7, 0x7EF); // Currently from old ED_BMSdiag - do not use!
   //items = this->Request_Diagnostics(rqBattVIN);
 
   byte OKcount = 0;
@@ -607,7 +594,7 @@ boolean canDiag::getBatteryVIN(BatteryDiag_t *myBMS, boolean debug_verbose) {
     }
   }
   return false;
-}
+}*/
 
 //--------------------------------------------------------------------------------
 //! \brief   Read and evaluate battery high voltage status
@@ -673,9 +660,22 @@ boolean canDiag::getIsolationValue(BatteryDiag_t *myBMS, boolean debug_verbose) 
 boolean canDiag::getBatteryCapacity(BatteryDiag_t *myBMS, boolean debug_verbose) {
   debug_verbose = debug_verbose & VERBOSE_ENABLE;
   uint16_t items;
+  uint16_t value;
   boolean fOK = false;
 
   this->setCAN_ID(rqID_BMS, respID_BMS);
+
+  items = this->Request_Diagnostics(rqBattMeas_Capacity);
+  if (items) {
+    if (debug_verbose) {
+      this->PrintReadBuffer(items);
+    }
+    this->ReadDiagWord(&value, data, 2, 1);
+    myBMS->CapMeas = value;
+    fOK = true;
+  } else {
+    fOK = false;
+  }
 
   items = this->Request_Diagnostics(rqBattCapacity_dSOC_P1);
   delay(1000);
@@ -685,22 +685,16 @@ boolean canDiag::getBatteryCapacity(BatteryDiag_t *myBMS, boolean debug_verbose)
       this->PrintReadBuffer(items);
     }
 
-    //this->ReadDiagWord(&myBMS->HVoff_time,data,3,1); //myBMS->HVoff_time = (unsigned long) data[5] * 65535 + (uint16_t) data[6] * 256 + data[7];
-    //this->ReadDiagWord(&myBMS->HV_lowcurrent,data,5,1); //myBMS->HV_lowcurrent = (unsigned long) data[9] * 65535 + (uint16_t) data[10] * 256 + data[11];
-    //this->ReadDiagWord(&myBMS->OCVtimer,data,7,1); //myBMS->OCVtimer = (uint16_t) data[12] * 256 + data[13];
     myBMS->fSOH = data[9];
-    //this->ReadDiagWord(&myBMS->Cap_As.max,data,10,1);
-    //this->ReadDiagWord(&myBMS->Cap_As.min,data,12,1);
-    //this->ReadDiagWord(&myBMS->Cap_As.mean,data,14,1);
 
     if (CapMode == 1) {
       CellCapacity.clear();
       this->ReadCellCapacity(data, 16, (CELLCOUNT / 2)); //data starting at #16, but two mean values pushed before!
     }
 
-    fOK = true;
+    fOK &= true;
   } else {
-    fOK = false;
+    fOK &= false;
   }
 
   items = this->Request_Diagnostics(rqBattCapacity_dSOC_P2);
@@ -720,9 +714,9 @@ boolean canDiag::getBatteryCapacity(BatteryDiag_t *myBMS, boolean debug_verbose)
     if (CapMode == 1) {
       this->ReadCellCapacity(data, 3, CELLCOUNT / 2);
 
-      myBMS->Ccap_As.min = CellCapacity.minimum((int16_t *)&myBMS->CAP_min_at);
-      CellCapacity.push(myBMS->Ccap_As.min); CellCapacity.push(myBMS->Ccap_As.min);
-      myBMS->Ccap_As.max = CellCapacity.maximum((int16_t *)&myBMS->CAP_max_at);
+      myBMS->Ccap_As.min = CellCapacity.minimum(&myBMS->CAP_min_at); //(int16_t *)
+      //CellCapacity.push(myBMS->Ccap_As.min); CellCapacity.push(myBMS->Ccap_As.min);
+      myBMS->Ccap_As.max = CellCapacity.maximum(&myBMS->CAP_max_at);
       myBMS->Ccap_As.mean = CellCapacity.mean();
     }
 
@@ -731,7 +725,7 @@ boolean canDiag::getBatteryCapacity(BatteryDiag_t *myBMS, boolean debug_verbose)
     fOK &= false;
   }
 
-  //*** Read second capacity values in As/100 ***
+  //*** Read second capacity values (can be in As/100, depending of BMS rev.) ***
   items = this->Request_Diagnostics(rqBattCapacity_P1);
   delay(1000);
   items = this->Request_Diagnostics(rqBattCapacity_P1);
@@ -739,16 +733,27 @@ boolean canDiag::getBatteryCapacity(BatteryDiag_t *myBMS, boolean debug_verbose)
     if (debug_verbose) {
       this->PrintReadBuffer(items);
     }
+    this->ReadDiagWord(&myBMS->CAP2_mean, data, 3, 1);
+    
     if (CapMode == 2) {
       CellCapacity.clear();
       this->ReadCellCapacity(data, 5, CELLCOUNT / 2);
-      this->ReadDiagWord(&myBMS->CAP2_mean, data, 3, 1);
     }
 
     fOK &= true;
   } else {
     fOK &= false;
   }
+
+  //Determine capacity factor, depending on BMS rev.
+  if (CellCapacity.mean() > 3000) {
+    myBMS->CAP_factor = 1;
+  } else {
+    myBMS->CAP_factor = 10;
+  }
+  if (myBMS->CAP2_mean < 3000) {
+    myBMS->CAP2_mean = myBMS->CAP2_mean * 10;
+  }  
 
   items = this->Request_Diagnostics(rqBattCapacity_P2);
   delay(1000);
@@ -759,42 +764,14 @@ boolean canDiag::getBatteryCapacity(BatteryDiag_t *myBMS, boolean debug_verbose)
     }
     if (CapMode == 2) {
       this->ReadCellCapacity(data, 3, CELLCOUNT / 2);
-      myBMS->Ccap_As.min = CellCapacity.minimum((int16_t *)&myBMS->CAP_min_at) * 10;
-      myBMS->Ccap_As.max = CellCapacity.maximum((int16_t *)&myBMS->CAP_max_at) * 10;
-      myBMS->Ccap_As.mean = CellCapacity.mean() * 10;
+      myBMS->Ccap_As.min = CellCapacity.minimum(&myBMS->CAP_min_at) * myBMS->CAP_factor;//(int16_t *)
+      myBMS->Ccap_As.max = CellCapacity.maximum(&myBMS->CAP_max_at) * myBMS->CAP_factor;
+      myBMS->Ccap_As.mean = CellCapacity.mean() * myBMS->CAP_factor;
     }
 
     fOK &= true;
   } else {
     fOK &= false;
-  }
-
-  return fOK;
-}
-
-//--------------------------------------------------------------------------------
-//! \brief   Read and evaluate experimental data of the bms
-//! \param   enable verbose / debug output (boolean)
-//! \return  report success (boolean)
-//--------------------------------------------------------------------------------
-boolean canDiag::getBatteryExperimentalData(BatteryDiag_t *myBMS, boolean debug_verbose) {
-
-  uint16_t items;
-  uint16_t value;
-  boolean fOK = false;
-
-  this->setCAN_ID(rqID_BMS, respID_BMS);
-
-  items = this->Request_Diagnostics(rqBattMeas_Capacity);
-  if (items) {
-    if (debug_verbose) {
-      this->PrintReadBuffer(items);
-    }
-    this->ReadDiagWord(&value, data, 2, 1);
-    myBMS->CapMeas = value;
-    fOK = true;
-  } else {
-    fOK = false;
   }
 
   return fOK;
@@ -829,7 +806,7 @@ boolean canDiag::getBatteryVoltage(BatteryDiag_t *myBMS, boolean debug_verbose) 
       this->PrintReadBuffer(items);
     }
     this->ReadCellVoltage(data, 3, CELLCOUNT / 2);
-    myBMS->Cvolts.min = CellVoltage.minimum(&myBMS->CV_min_at);
+    myBMS->Cvolts.min = CellVoltage.minimum(&myBMS->CV_min_at); //(int16_t *)
     myBMS->Cvolts.max = CellVoltage.maximum(&myBMS->CV_max_at);
     myBMS->Cvolts.mean = CellVoltage.mean();
     myBMS->Cvolts_stdev = CellVoltage.stddev();
@@ -930,6 +907,18 @@ boolean canDiag::getBatteryState(BatteryDiag_t *myBMS, boolean debug_verbose) {
     }
     this->ReadDiagWord(&value, data, 3, 1);
     myBMS->Energy = value;
+    fOK &= true;
+  } else {
+    fOK &= false;
+  }
+
+  items = this->Request_Diagnostics(rqSOC_EVC);
+  if (items) {
+    if (debug_verbose) {
+      this->PrintReadBuffer(items);
+    }
+    this->ReadDiagWord(&value, data, 3, 1);
+    myBMS->SOC_EVC = value / 50.0;
     fOK &= true;
   } else {
     fOK &= false;
@@ -1047,8 +1036,11 @@ boolean canDiag::getBatterySOH(BatteryDiag_t *myBMS, boolean debug_verbose) {
     if (debug_verbose) {
       this->PrintReadBuffer(items);
     }
-    myBMS->SOH = data[11] / 2; //SOH value (x/2)
+    myBMS->SOH = data[11]; //SOH value (x/2) done in PRN module
     this->ReadDiagWord(&value, data, 7, 1);
+    if (value == 0xFFFF) { //Data filed longer in new BMS rev. -> warp for next entry
+      this->ReadDiagWord(&value, data, 9, 1);
+    }
     myBMS->CAPusable_max = value;
     //this->ReadDiagWord(&value,data,18,1);
     //myBMS->CAPusable = value;
@@ -1171,6 +1163,7 @@ boolean canDiag::getHVcontactorCount(BatteryDiag_t *myBMS, boolean debug_verbose
 //--------------------------------------------------------------------------------
 boolean canDiag::printOCVtable(BatteryDiag_t *myBMS, boolean debug_verbose) {
   (void) myBMS;
+
   uint16_t items;
   uint16_t value;
   bool fOK = false;
@@ -1206,6 +1199,7 @@ boolean canDiag::printOCVtable(BatteryDiag_t *myBMS, boolean debug_verbose) {
 //--------------------------------------------------------------------------------
 boolean canDiag::printRESfactors(BatteryDiag_t *myBMS, boolean debug_verbose) {
   (void) myBMS;
+
   uint16_t items;
   byte offset = 0;
   uint16_t value;
@@ -1257,6 +1251,7 @@ boolean canDiag::printRESfactors(BatteryDiag_t *myBMS, boolean debug_verbose) {
 //--------------------------------------------------------------------------------
 boolean canDiag::printBMSlog(BatteryDiag_t *myBMS, boolean debug_verbose) {
   (void) myBMS;
+
   uint16_t items;
   bool fOK = false;
 
@@ -1394,8 +1389,8 @@ boolean canDiag::printCHGlog(boolean debug_verbose) {
       Serial.print(ChgLog_P[i].chgTime); PRINT_CSV;
       Serial.print(ChgLog_P[i].soc / 5); PRINT_CSV;     
       Serial.print(ChgLog_P[i].temp - 40); PRINT_CSV;
-      Serial.println(ChgLog_P[i].chgStatus);
-      Serial.print(ChgLog_P[i].chgFlag, HEX); PRINT_CSV;
+      Serial.print(ChgLog_P[i].chgStatus); PRINT_CSV;
+      Serial.println(ChgLog_P[i].chgFlag, HEX); 
     }
   }
 
@@ -1406,12 +1401,13 @@ boolean canDiag::printCHGlog(boolean debug_verbose) {
 }
 
 //--------------------------------------------------------------------------------
-//! \brief   Test if a OBL fastcharger is installed by reading HW-Rev.
+//! \brief   Test if a OBL slow charger is installed by reading HW-Rev.
 //! \param   enable verbose / debug output (boolean)
-//! \return  report success (boolean)
+//! \return  report success (char) 7kW (true), 22kW (false), fail (-1)
 //--------------------------------------------------------------------------------
-char canDiag::OBL_7KW_Installed(ChargerDiag_t *myOBL, boolean debug_verbose) {
+int8_t canDiag::OBL_7KW_Installed(ChargerDiag_t *myOBL, boolean debug_verbose) {
   (void) myOBL;
+
   uint16_t items;
 
   this->setCAN_ID(rqID_OBL, respID_OBL);
@@ -1421,10 +1417,12 @@ char canDiag::OBL_7KW_Installed(ChargerDiag_t *myOBL, boolean debug_verbose) {
     if (debug_verbose) {
        PrintReadBuffer(items);
     }
-    if (memcmp_P((const char *) (data + 3), ID_7KW, 4) == 0) {
+    if (memcmp_P(data + 3, ID_7KW, 4*sizeof(char)) == 0) {
       return true;
-    } else {
+    } else if (memcmp_P(data + 3, ID_22KW, 4*sizeof(char)) == 0) {
       return false;
+    } else {
+      return -1;
     }
   } else {
     return -1;
@@ -1471,7 +1469,7 @@ boolean canDiag::printECUrev(boolean debug_verbose, byte _type[]) {
       PrintReadBuffer(items);
     }
     byte n = 17;
-    Serial.print(F(","));
+    Serial.print(',');
     do {
       if (data[n] < 0x10) {
         Serial.print('0');
@@ -1502,7 +1500,7 @@ boolean canDiag::printECUrev(boolean debug_verbose, byte _type[]) {
       PrintReadBuffer(items);
     }
     byte n = 3;
-    Serial.print(F(", "));
+    Serial.print(',');
     do {
       if (data[n] < 0x20) {
         Serial.print(data[n], HEX);
@@ -1520,6 +1518,52 @@ boolean canDiag::printECUrev(boolean debug_verbose, byte _type[]) {
 }
 
 //--------------------------------------------------------------------------------
+//! \brief   Get the cooling method of the battery:
+//! \brief   (with chiller option or only water cooled)
+//! \return  report value (int8_t)
+//--------------------------------------------------------------------------------
+int8_t canDiag::getBattCoolingType(boolean debug_verbose) {
+  uint16_t items;
+  int8_t CoolingType = 0;
+
+  this->setCAN_ID(rqID_EVC, respID_EVC);
+
+  items = this->Request_Diagnostics(rqEV_BattCooling);
+  
+  if (items) {
+    if (debug_verbose) {
+      PrintReadBuffer(items);
+    }
+    CoolingType = data[3];
+  }
+  
+  return CoolingType;
+}
+
+//--------------------------------------------------------------------------------
+//! \brief   Get the heating method of the battery:
+//! \brief   (water PTC installed?)
+//! \return  report value (int8_t)
+//--------------------------------------------------------------------------------
+int8_t canDiag::getBattHeaterType(boolean debug_verbose) {
+  uint16_t items;
+  int8_t HeatingType = 0;
+
+  this->setCAN_ID(rqID_EVC, respID_EVC);
+
+  items = this->Request_Diagnostics(rqEV_BattHeating);
+  
+  if (items) {
+    if (debug_verbose) {
+      PrintReadBuffer(items);
+    }
+    HeatingType = data[3];
+  }
+  
+  return HeatingType;
+}
+
+//--------------------------------------------------------------------------------
 //! \brief   Read and evaluate charger temperatures (values - 40 in deg C)
 //! \param   enable verbose / debug output (boolean)
 //! \return  report success (boolean)
@@ -1529,32 +1573,71 @@ boolean canDiag::getChargerTemperature(ChargerDiag_t *myOBL, boolean debug_verbo
   uint16_t items;
   boolean fOK = false;
 
-  this->setCAN_ID(rqID_OBL, respID_OBL);
-  items = this->Request_Diagnostics(rqChargerTemperatures);
+  this->setCAN_ID(rqID_OBL, respID_OBL);  //ECU address of OBL and JB2 are the same
 
-  if (items) {
-    if (debug_verbose) {
-      PrintReadBuffer(items);
+  //OBL slow charger variant
+  if (!FASTCHG) { 
+    items = this->Request_Diagnostics(rqChargerTemperatures);
+  
+    if (items) {
+      if (debug_verbose) {
+        PrintReadBuffer(items);
+      }
+      myOBL->InTemp = data[3];
+      myOBL->OutTemp = data[4];
+      myOBL->InternalTemp = data[5];
+      fOK = true;
+    } else {
+      fOK = false;
     }
-    myOBL->InTemp = data[3];
-    myOBL->OutTemp = data[4];
-    myOBL->InternalTemp = data[5];
-    fOK = true;
-  } else {
-    fOK = false;
-  }
-
-  this->setCAN_ID(rqID_CHGCTRL, respID_CHGCTRL);
-  items = this->Request_Diagnostics(rqCoolantTemp);
-
-  if (items) {
-    if (debug_verbose) {
-      PrintReadBuffer(items);
+  
+    this->setCAN_ID(rqID_CHGCTRL, respID_CHGCTRL);
+    items = this->Request_Diagnostics(rqCoolantTemp);
+  
+    if (items) {
+      if (debug_verbose) {
+        PrintReadBuffer(items);
+      }
+      myOBL->CoolantTemp = data[3];
+      fOK &= true;
+    } else {
+      fOK &= false;
     }
-    myOBL->CoolantTemp = data[3];
-    fOK &= true;
+  
+  //JB2 fast charger variant
   } else {
-    fOK &= false;
+    items = this->Request_Diagnostics(rqJB2Temp_SYS);
+    if (items) {
+      if (debug_verbose) {
+        PrintReadBuffer(items);
+      }
+      myOBL->SysTemp = data[3];
+      fOK = true;
+    } else {
+      fOK = false;
+    }
+    
+    items = this->Request_Diagnostics(rqJB2Temp_HOT);
+    if (items) {
+      if (debug_verbose) {
+        PrintReadBuffer(items);
+      }
+      myOBL->InternalTemp = data[3];
+      fOK &= true;
+    } else {
+      fOK &= false;
+    }
+  
+    items = this->Request_Diagnostics(rqJB2Temp_COOL);
+    if (items) {
+      if (debug_verbose) {
+        PrintReadBuffer(items);
+      }
+      myOBL->CoolantTemp = data[3];
+      fOK &= true;
+    } else {
+      fOK &= false;
+    }
   }
 
   return fOK;
@@ -1572,79 +1655,155 @@ boolean canDiag::getChargerCtrlValues(ChargerDiag_t *myOBL, boolean debug_verbos
   uint16_t value;
   bool fOK = false;
 
-  this->setCAN_ID(rqID_CHGCTRL, respID_CHGCTRL);
-
-  items = this->Request_Diagnostics(rqChargerSelCurrent);
-  if (items) {
-    if (debug_verbose) {
-      this->PrintReadBuffer(items);
-    }
-    myOBL->Amps_setpoint = data[3] / 4; //Get data (x/4)
-    fOK = true;
-  } else {
-    fOK = false;
-  }
-
-  items = this->Request_Diagnostics(rqMainsMaxCurrent);
-  if (items) {
-    if (debug_verbose) {
-      this->PrintReadBuffer(items);
-    }
-    myOBL->AmpsChargingpoint = data [3];
-    fOK &= true;
-  } else {
-    fOK &= false;
-  }
-
-  items = this->Request_Diagnostics(rqConnectorCoding);
-  if (items) {
-    if (debug_verbose) {
-      this->PrintReadBuffer(items);
-    }
-    this->ReadDiagWord(&value, data, 3, 1);
-    if (value < 1800) {
-      myOBL->AmpsCableCode = value;
+  //OBL slow charger variant
+  if (!FASTCHG) { 
+    this->setCAN_ID(rqID_CHGCTRL, respID_CHGCTRL);
+    items = this->Request_Diagnostics(rqChargerSelCurrent);
+    if (items) {
+      if (debug_verbose) {
+        this->PrintReadBuffer(items);
+      }
+      myOBL->Amps_setpoint = data[3] / 4; //Get data (x/4)
+      fOK = true;
     } else {
-      myOBL->AmpsCableCode = 0;
+      fOK = false;
     }
-    fOK &= true;
+  
+    items = this->Request_Diagnostics(rqMainsMaxCurrent);
+    if (items) {
+      if (debug_verbose) {
+        this->PrintReadBuffer(items);
+      }
+      myOBL->AmpsChargingpoint = data [3];
+      fOK &= true;
+    } else {
+      fOK &= false;
+    }
+  
+    items = this->Request_Diagnostics(rqConnectorCoding);
+    if (items) {
+      if (debug_verbose) {
+        this->PrintReadBuffer(items);
+      }
+      this->ReadDiagWord(&value, data, 3, 1);
+      if (value < 1800) {
+        myOBL->AmpsCableCode = value;
+      } else {
+        myOBL->AmpsCableCode = 0;
+      }
+      fOK &= true;
+    } else {
+      fOK &= false;
+    }
+  
+    items = this->Request_Diagnostics(rqMaxPowerAvail);
+    if (items) {
+      if (debug_verbose) {
+        this->PrintReadBuffer(items);
+      }
+      this->ReadDiagWord(&value, data, 3, 1);
+      myOBL->CHGpower[2] = value;
+      fOK &= true;
+    } else {
+      fOK &= false;
+    }
+  
+    items = this->Request_Diagnostics(rqChargerPilotState);
+    if (items) {
+      if (debug_verbose) {
+        this->PrintReadBuffer(items);
+      }
+      myOBL->PilotState = data[3];
+      fOK &= true;
+    } else {
+      fOK &= false;
+    }
+  
+    this->setCAN_ID(rqID_OBL, respID_OBL);
+    items = this->Request_Diagnostics(rqChargerState);
+    if (items) {
+      if (debug_verbose) {
+        this->PrintReadBuffer(items);
+      }
+      myOBL->ChargerState = data[3];
+      fOK &= true;
+    } else {
+      fOK &= false;
+    }
+  //JB2 fast charger variant
   } else {
-    fOK &= false;
-  }
+    this->setCAN_ID(rqID_OBL, respID_OBL);
+    items = this->Request_Diagnostics(rqJB2SelCurrent);
+    if (items) {
+      if (debug_verbose) {
+        this->PrintReadBuffer(items);
+      }
+      myOBL->Amps_setpoint = data[3] / 4; //Get data (x/4)
+      fOK = true;
+    } else {
+      fOK = false;
+    }
 
-  items = this->Request_Diagnostics(rqMaxPowerAvail);
-  if (items) {
-    if (debug_verbose) {
-      this->PrintReadBuffer(items);
+    items = this->Request_Diagnostics(rqJB2Pilot_DUTY);
+    if (items) {
+      if (debug_verbose) {
+        this->PrintReadBuffer(items);
+      }
+      if (data[3] / 2 <= 85) {
+        myOBL->AmpsChargingpoint = (data [3] / 2.0) * 0.6;
+      } else if (data[3] / 2 <= 97) {
+        myOBL->AmpsChargingpoint = ((data [3] / 2.0) - 64) * 2.5;
+      } else {
+        myOBL->AmpsChargingpoint = 0;
+      }
+      fOK &= true;
+    } else {
+      fOK &= false;
     }
-    this->ReadDiagWord(&value, data, 3, 1);
-    myOBL->CHGpower[2] = value;
-    fOK &= true;
-  } else {
-    fOK &= false;
-  }
 
-  items = this->Request_Diagnostics(rqChargerPilotState);
-  if (items) {
-    if (debug_verbose) {
-      this->PrintReadBuffer(items);
+    items = this->Request_Diagnostics(rqJB2Pilot_V);
+    if (items) {
+      if (debug_verbose) {
+        this->PrintReadBuffer(items);
+      }
+      byte pilotV = (data[3] / 4.0) - 15;
+      if (pilotV >= 11) {
+        myOBL->PilotState = 0;
+      } else if (pilotV >= 8) {
+        myOBL->PilotState = 1;
+      } else if (pilotV >= 5) {
+        myOBL->PilotState = 2;
+      } else if (pilotV >= 2) {
+        myOBL->PilotState = 3;
+      } else {
+        myOBL->PilotState = 4;
+      }
+      fOK &= true;
+    } else {
+      fOK &= false;
     }
-    myOBL->PilotState = data[3];
-    fOK &= true;
-  } else {
-    fOK &= false;
-  }
 
-  this->setCAN_ID(rqID_OBL, respID_OBL);
-  items = this->Request_Diagnostics(rqChargerState);
-  if (items) {
-    if (debug_verbose) {
-      this->PrintReadBuffer(items);
+    this->setCAN_ID(rqID_OBL, respID_OBL);
+    items = this->Request_Diagnostics(rqJB2State);
+    if (items) {
+      if (debug_verbose) {
+        this->PrintReadBuffer(items);
+      }
+      switch (data[3]) {
+        case 1:
+          myOBL->ChargerState = 0; //CHG  
+          break;
+        case 4:
+          myOBL->ChargerState = 1; //ON  
+          break;
+        case 5:
+          myOBL->ChargerState = 2; //STBY 
+          break;
+      }
+      fOK &= true;
+    } else {
+      fOK &= false;
     }
-    myOBL->ChargerState = data[3];
-    fOK &= true;
-  } else {
-    fOK &= false;
   }
 
   return fOK;
@@ -1659,39 +1818,86 @@ boolean canDiag::getChargerDC(ChargerDiag_t *myOBL, boolean debug_verbose) {
 
   uint16_t items;
   uint16_t value;
+  bool fOK = false;  
 
   this->setCAN_ID(rqID_OBL, respID_OBL);
-  items = this->Request_Diagnostics(rqChargerDC);
 
-  if (items) {
-    if (debug_verbose) {
-      this->PrintReadBuffer(items);
-    }
-    this->ReadDiagWord(&value, data, 4, 1);
-    if (value < 0xEA00) {  //OBL showing only valid data while charging
-      myOBL->DC_HV = value;
+  //OBL slow charger variant
+  if (!FASTCHG) {
+    items = this->Request_Diagnostics(rqChargerDC);
+    if (items) {
+      if (debug_verbose) {
+        this->PrintReadBuffer(items);
+      }
+      this->ReadDiagWord(&value, data, 4, 1);
+      if (value < 0xEA00) {  //OBL showing only valid data while charging
+        myOBL->DC_HV = value;
+      } else {
+        myOBL->DC_HV = 0;
+      }
+      this->ReadDiagWord(&value, data, 10, 1);
+      if (value < 0xEA00) {  //OBL showing only valid data while charging
+        myOBL->DC_Current = value;
+      } else {
+        myOBL->DC_Current = 0;
+      }
+  
+      items = this->Request_Diagnostics(rqChargerLV);
+      if (items) {
+        if (debug_verbose) {
+          this->PrintReadBuffer(items);
+        }
+        this->ReadDiagWord(&value, data, 3, 1);
+        myOBL->LV = value;
+      }
+  
+      return true;
     } else {
-      myOBL->DC_HV = 0;
+      return false;
     }
-    this->ReadDiagWord(&value, data, 10, 1);
-    if (value < 0xEA00) {  //OBL showing only valid data while charging
-      myOBL->DC_Current = value;
+  //JB2 fast charger variant
+  } else {
+    items = this->Request_Diagnostics(rqJB2DC_V);
+    if (items) {
+      if (debug_verbose) {
+        this->PrintReadBuffer(items);
+      }
+      this->ReadDiagWord(&value, data, 3, 1);
+      myOBL->DC_HV = (value - 1023) * 10;
+      fOK = true;
     } else {
-      myOBL->DC_Current = 0;
+      fOK = false;
     }
 
-    items = this->Request_Diagnostics(rqChargerLV);
+    items = this->Request_Diagnostics(rqJB2DC_A);
+    if (items) {
+      if (debug_verbose) {
+        this->PrintReadBuffer(items);
+      }
+      this->ReadDiagWord(&value, data, 3, 1);
+      if (value > 0x0C80) {  //OBL showing only valid data while charging
+        myOBL->DC_Current = (value * 0.625) - 2000;
+      } else {
+        myOBL->DC_Current = 0;
+      }
+      fOK &= true;
+    } else {
+      fOK &= false;
+    }
+
+    items = this->Request_Diagnostics(rqJB2LV);
     if (items) {
       if (debug_verbose) {
         this->PrintReadBuffer(items);
       }
       this->ReadDiagWord(&value, data, 3, 1);
       myOBL->LV = value;
+      fOK &= true;
+    } else {
+      fOK &= false;
     }
 
-    return true;
-  } else {
-    return false;
+    return fOK;
   }
 }
 
@@ -1704,63 +1910,154 @@ boolean canDiag::getChargerAC(ChargerDiag_t *myOBL, boolean debug_verbose) {
 
   uint16_t items;
   uint16_t value;
+  bool fOK = false;
 
   this->setCAN_ID(rqID_OBL, respID_OBL);
-  items = this->Request_Diagnostics(rqChargerAC);
 
-  if (items) {
-    if (debug_verbose) {
-      this->PrintReadBuffer(items);
-    }
-    //Get AC Currents (two rails from >= 20A, sum up for total current)
-    this->ReadDiagWord(&value, data, 10, 1);
-    if (value < 0xEA00) {  //OBL showing only valid data while charging
-      myOBL->MainsAmps[0] = value;
+  //OBL slow charger variant
+  if (!FASTCHG) {  
+    items = this->Request_Diagnostics(rqChargerAC);
+    if (items) {
+      if (debug_verbose) {
+        this->PrintReadBuffer(items);
+      }
+      //Get AC Currents (two rails from >= 20A, sum up for total current)
+      this->ReadDiagWord(&value, data, 10, 1);
+      if (value < 0xEA00) {  //OBL showing only valid data while charging
+        myOBL->MainsAmps[0] = value;
+      } else {
+        myOBL->MainsAmps[0] = 0;
+      }
+      this->ReadDiagWord(&value, data, 12, 1);
+      if (value < 0xEA00) {  //OBL showing only valid data while charging
+        myOBL->MainsAmps[1] = value;
+      } else {
+        myOBL->MainsAmps[1] = 0;
+      }
+      myOBL->MainsAmps[2] = 0;
+  
+      //Get AC Voltages
+      this->ReadDiagWord(&value, data, 4, 1);
+      if (value < 0xEA00) {  //OBL showing only valid data while charging
+        myOBL->MainsVoltage[0] = value;
+  
+      } else {
+        myOBL->MainsVoltage[0] = 0;
+      }
+      myOBL->MainsVoltage[1] = 0; myOBL->MainsVoltage[2] = 0;
+      if (myOBL->MainsAmps[0] > 0 || myOBL->MainsAmps[1] > 0) {
+        myOBL->MainsFreq = data[15];
+      } else {
+        myOBL->MainsFreq = 0;
+      }
+  
+      //Get AC Power
+      this->ReadDiagWord(&value, data, 16, 1);
+      if (value < 0xEA00) {  //OBL showing only valid data while charging
+        myOBL->CHGpower[0] = value;
+  
+      } else {
+        myOBL->CHGpower[0] = 0;
+      }
+      this->ReadDiagWord(&value, data, 18, 1);
+      if (value < 0xEA00) {  //OBL showing only valid data while charging
+        myOBL->CHGpower[1] = value;
+  
+      } else {
+        myOBL->CHGpower[1] = 0;
+      }
+  
+      return true;
     } else {
-      myOBL->MainsAmps[0] = 0;
+      return false;
     }
-    this->ReadDiagWord(&value, data, 12, 1);
-    if (value < 0xEA00) {  //OBL showing only valid data while charging
-      myOBL->MainsAmps[1] = value;
-    } else {
-      myOBL->MainsAmps[1] = 0;
-    }
-    myOBL->MainsAmps[2] = 0;
-
-    //Get AC Voltages
-    this->ReadDiagWord(&value, data, 4, 1);
-    if (value < 0xEA00) {  //OBL showing only valid data while charging
-      myOBL->MainsVoltage[0] = value;
-
-    } else {
-      myOBL->MainsVoltage[0] = 0;
-    }
-    myOBL->MainsVoltage[1] = 0; myOBL->MainsVoltage[2] = 0;
-    if (myOBL->MainsAmps[0] > 0 || myOBL->MainsAmps[1] > 0) {
-      myOBL->MainsFreq = data[15];
-    } else {
-      myOBL->MainsFreq = 0;
-    }
-
-    //Get AC Power
-    this->ReadDiagWord(&value, data, 16, 1);
-    if (value < 0xEA00) {  //OBL showing only valid data while charging
-      myOBL->CHGpower[0] = value;
-
-    } else {
-      myOBL->CHGpower[0] = 0;
-    }
-    this->ReadDiagWord(&value, data, 18, 1);
-    if (value < 0xEA00) {  //OBL showing only valid data while charging
-      myOBL->CHGpower[1] = value;
-
-    } else {
-      myOBL->CHGpower[1] = 0;
-    }
-
-    return true;
+  //JB2 fast charger variant
   } else {
-    return false;
+    items = this->Request_Diagnostics(rqJB2AC_Ph12_RMS_V);
+    if (items) {
+      if (debug_verbose) {
+        this->PrintReadBuffer(items);
+      }
+      this->ReadDiagWord(&value, data, 3, 1);
+      myOBL->MainsVoltage[0] = value; //(x/2) done in PRN func.
+      fOK = true;
+    } else {
+      fOK = false;
+    }
+
+    items = this->Request_Diagnostics(rqJB2AC_Ph23_RMS_V);
+    if (items) {
+      if (debug_verbose) {
+        this->PrintReadBuffer(items);
+      }
+      this->ReadDiagWord(&value, data, 3, 1);
+      myOBL->MainsVoltage[1] = value; //(x/2) done in PRN func.
+      fOK &= true;
+    } else {
+      fOK &= false;
+    }
+
+    items = this->Request_Diagnostics(rqJB2AC_Ph31_RMS_V);
+    if (items) {
+      if (debug_verbose) {
+        this->PrintReadBuffer(items);
+      }
+      this->ReadDiagWord(&value, data, 3, 1);
+      myOBL->MainsVoltage[2] = value; //(x/2) done in PRN func.
+      fOK &= true;
+    } else {
+      fOK &= false;
+    }
+
+    items = this->Request_Diagnostics(rqJB2AC_Ph1_RMS_A);
+    if (items) {
+      if (debug_verbose) {
+        this->PrintReadBuffer(items);
+      }
+      this->ReadDiagWord(&value, data, 3, 1);
+      myOBL->MainsAmps[0] = (value * 0.625) - 2000; //(x/10) 
+      fOK &= true;
+    } else {
+      fOK &= false;
+    }
+
+    items = this->Request_Diagnostics(rqJB2AC_Ph2_RMS_A);
+    if (items) {
+      if (debug_verbose) {
+        this->PrintReadBuffer(items);
+      }
+      this->ReadDiagWord(&value, data, 3, 1);
+      myOBL->MainsAmps[1] = (value * 0.625) - 2000; //(x/10) 
+      fOK &= true;
+    } else {
+      fOK &= false;
+    }
+
+    items = this->Request_Diagnostics(rqJB2AC_Ph3_RMS_A);
+    if (items) {
+      if (debug_verbose) {
+        this->PrintReadBuffer(items);
+      }
+      this->ReadDiagWord(&value, data, 3, 1);
+      myOBL->MainsAmps[2] = (value * 0.625) - 2000; //(x/10) 
+      fOK &= true;
+    } else {
+      fOK &= false;
+    }
+
+    items = this->Request_Diagnostics(rqJB2AC_Power);
+    if (items) {
+      if (debug_verbose) {
+        this->PrintReadBuffer(items);
+      }
+      this->ReadDiagWord(&value, data, 3, 1);
+      myOBL->CHGpower[0] = value - 20000; //Mains consumed power in W 
+      fOK &= true;
+    } else {
+      fOK &= false;
+    }
+
+    return fOK;
   }
 }
 
@@ -1768,8 +2065,8 @@ boolean canDiag::getChargerAC(ChargerDiag_t *myOBL, boolean debug_verbose) {
 //! \brief   Set charger ac_max current
 //! \param   current only in the range of 6 to 20 A (byte)
 //! \brief   >>> FOR TEST PURPOSE ONLY! DO NOT USE WHILE CHARGING <<<
-//! \brief   >>> DO NOT USE ON US and UK cars, as they work with 32A max<<< 
-//! \brief   >>> with entering [-yes] you ACCEPT ALL CONSEQUENCES 
+//! \brief   >>> DO NOT USE ON US and UK cars, as they already use with 32A max<<< 
+//! \brief   >>> with entering [set ac_max 20 -yes] you ACCEPT ALL CONSEQUENCES 
 //! \brief   >>> AND THE USAGE IS SOLEY AT YOUR OWN RISK! <<<
 //! \brief   >>> LOSS OF WARRANTY, DAMAGE(s), VIOLATION OF REGULATIVE RULES <<<
 //! \brief   >>> NO LIABILITY FOR THIS SOFTWARE - SEE LICENSE STATEMENT! <<<
@@ -1922,6 +2219,7 @@ boolean canDiag::getTCUdata(TCUdiag_t *myTCU, boolean debug_verbose) {
 //--------------------------------------------------------------------------------
 boolean canDiag::getTCUnetwork(TCUdiag_t *myTCU, boolean debug_verbose) {
   (void) myTCU;
+
   uint16_t items;
   boolean fOK = false;
 
@@ -1939,7 +2237,7 @@ boolean canDiag::getTCUnetwork(TCUdiag_t *myTCU, boolean debug_verbose) {
     Serial.println();
     fOK = true;
   } else {
-    Serial.println(F("-"));
+    Serial.println('-');
     fOK = false;
   }
 
@@ -1954,5 +2252,3 @@ boolean canDiag::CalcPower(BatteryDiag_t *myBMS) {
   myBMS->Power = myBMS->HV * myBMS->Amps2 / 1000.0;
   return true;
 }
-
-

@@ -17,9 +17,9 @@
 //--------------------------------------------------------------------------------
 //! \file    ED4scan_CLI.ino
 //! \brief   Functions for the Command Line Interface (CLI) menu system
-//! \date    2018-April
+//! \date    2018-September
 //! \author  MyLab-odyssey
-//! \version 0.4.3
+//! \version 0.5.5
 //--------------------------------------------------------------------------------
 
 //--------------------------------------------------------------------------------
@@ -29,7 +29,6 @@ void setupMenu() {
   cmdInit();
 
   if (HELP) {  
-    cmdAdd("help", help);
     cmdAdd("?", help);
   } 
   cmdAdd("..", main_menu);
@@ -38,7 +37,7 @@ void setupMenu() {
   cmdAdd("v", get_voltages);
   cmdAdd("bms", bms_sub);
   cmdAdd("tcu", tcu_sub);
-  if (OBL.OBL7KW > -1) cmdAdd("obc", obl_sub);
+  if (OBL.OBL7KW ^ FASTCHG) cmdAdd("obc", obl_sub);
   cmdAdd("all", get_all);
   cmdAdd("log", set_logging);
   cmdAdd("info", show_info);
@@ -51,6 +50,7 @@ void setupMenu() {
 //--------------------------------------------------------------------------------
 void get_all (uint8_t arg_cnt, char **args) {
   (void) arg_cnt, (void) args;  // Avoid unused param warning
+
   switch (myDevice.menu) {
     case subBMS:
       printBMSall();
@@ -75,6 +75,7 @@ void get_all (uint8_t arg_cnt, char **args) {
 //--------------------------------------------------------------------------------
 void get_temperatures (uint8_t arg_cnt, char **args) {
   (void) arg_cnt, (void) args;  // Avoid unused param warning
+  
   switch (myDevice.menu) {
     case subBMS:
       if (DiagCAN.getBatteryTemperature(&BMS, false)){
@@ -100,6 +101,7 @@ void get_temperatures (uint8_t arg_cnt, char **args) {
 void get_voltages (uint8_t arg_cnt, char **args) {
   (void) arg_cnt, (void) args;  // Avoid unused param warning
   byte bms_sel[] = {BMSstate, BMSlimit, BMSbal};
+  
   switch (myDevice.menu) {
     case subBMS:
       getState_BMS(bms_sel, sizeof(bms_sel));
@@ -125,6 +127,7 @@ void get_voltages (uint8_t arg_cnt, char **args) {
 //--------------------------------------------------------------------------------
 void get_OCVtable (uint8_t arg_cnt, char **args) {
   (void) arg_cnt, (void) args;  // Avoid unused param warning
+  
   switch (myDevice.menu) {
     case subBMS:
         PrintSPACER(F("OCV Lookup"));
@@ -143,6 +146,7 @@ void get_OCVtable (uint8_t arg_cnt, char **args) {
 //--------------------------------------------------------------------------------
 void get_RESfactors (uint8_t arg_cnt, char **args) {
   (void) arg_cnt, (void) args;  // Avoid unused param warning
+  
   switch (myDevice.menu) {
     case subBMS:
         PrintSPACER(F("Cell Resistance"));
@@ -161,6 +165,7 @@ void get_RESfactors (uint8_t arg_cnt, char **args) {
 //--------------------------------------------------------------------------------
 void get_BMSlog (uint8_t arg_cnt, char **args) {
   (void) arg_cnt, (void) args;  // Avoid unused param warning
+  
   switch (myDevice.menu) {
     case subBMS:
         PrintSPACER(F("BMS Log"));
@@ -179,7 +184,8 @@ void get_BMSlog (uint8_t arg_cnt, char **args) {
 //--------------------------------------------------------------------------------
 void get_SOHstate (uint8_t arg_cnt, char **args) {
   (void) arg_cnt, (void) args;  // Avoid unused param warning
-  byte bms_sel[] = {3,5};
+  
+  byte bms_sel[] = {5};
   switch (myDevice.menu) {
     case subBMS:
       PrintSPACER(F("Battery SOH"));
@@ -199,6 +205,7 @@ void get_SOHstate (uint8_t arg_cnt, char **args) {
 //--------------------------------------------------------------------------------
 void get_CHGlog (uint8_t arg_cnt, char **args) {
   (void) arg_cnt, (void) args;  // Avoid unused param warning
+  
   switch (myDevice.menu) {
     case subBMS:
     case subOBL:
@@ -216,18 +223,17 @@ void get_CHGlog (uint8_t arg_cnt, char **args) {
 //! \param   Argument count (int) and argument-list (char*) from Cmd.h
 //--------------------------------------------------------------------------------
 #ifdef HELP
-void help(uint8_t arg_cnt, char **args)
-{
+void help(uint8_t arg_cnt, char **args) {
   (void) arg_cnt, (void) args;  // Avoid unused param warning
+  
   switch (myDevice.menu) {
     case MAIN:
       Serial.println(F("Main:"));
       Serial.println(F(" BMS, OBC, TCU"));
       Serial.println(F(" all"));
-      Serial.println(F(" help"));
-      Serial.println(F(" info Show config"));
-      Serial.println(F(" log  Enable log"));
-      Serial.println(F(" set  Edit config"));
+      Serial.println(F(" info show config"));
+      Serial.println(F(" log  on|off [t]"));
+      Serial.println(F(" set  edit config"));
       Serial.println(F(" #    EV status"));
       break;
     case subBMS:
@@ -247,6 +253,7 @@ void help(uint8_t arg_cnt, char **args)
       Serial.println(MSG_ALL);
       break;
   }   
+  if ( myDevice.menu != MAIN) Serial.println(MSG_BACK);
 }
 #endif
 
@@ -255,24 +262,32 @@ void help(uint8_t arg_cnt, char **args)
 //! \param   Argument count (int) and argument-list (char*) from Cmd.h
 //--------------------------------------------------------------------------------
 void show_splash(uint8_t arg_cnt, char **args) {
+  boolean fOK;
   (void) arg_cnt, (void) args;  // Avoid unused param warning
-   byte selected[] = {BMSstate, BMSsoc, BMSlimit, EVkey, EVdcdc, EVodo, EVrange};
-   getState_BMS(selected, sizeof(selected));
-   printSplashScreen();
+  byte selected[] = {BMSstate, BMSsoc, BMSlimit, EVkey, EVdcdc, EVodo, EVrange};
+  fOK = getState_BMS(selected, sizeof(selected)); 
+  if (myDevice.progress & fOK) Serial.println(MSG_OK);
+  printSplashScreen();
 }
 
 //--------------------------------------------------------------------------------
 //! \brief   Callback to get all datasets depending on the active menu
 //! \param   Argument count (int) and argument-list (char*) from Cmd.h
 //--------------------------------------------------------------------------------
-void show_info(uint8_t arg_cnt, char **args)
-{
+void show_info(uint8_t arg_cnt, char **args) {
   (void) arg_cnt, (void) args;  // Avoid unused param warning
+  
   //Serial.print(F("Usable Memory: ")); Serial.println(getFreeRam());
   //Serial.print(F("Menu: ")); Serial.println(myDevice.menu);
   Serial.print(F("OBC     : ")); 
-  if (OBL.OBL7KW > -1) {
-    Serial.println((char *) pgm_read_word(OBL_ID + (OBL.OBL7KW)));
+  if (OBL.OBL7KW > -1) {   
+    if (OBL.OBL7KW ^ FASTCHG) { 
+      Serial.print((char *) pgm_read_word(OBL_ID + (OBL.OBL7KW)));
+      Serial.println(F(" inst."));
+    } else {
+      Serial.print(F("Recompile for "));
+      Serial.println((char *) pgm_read_word(OBL_ID + (!OBL.OBL7KW)));
+    }
   } else {
     Serial.println(FAILURE);
   }
@@ -335,7 +350,7 @@ void set_logging(uint8_t arg_cnt, char **args) {
 //! \param   Argument count (int) and argument-list (char*) from Cmd.h
 //--------------------------------------------------------------------------------
 void set_cmd(uint8_t arg_cnt, char **args) {
-  char cmdOK = -1;
+  int8_t cmdOK = -1;
   if (arg_cnt == 3) {
     if (strcmp(args[1], "cap_mode") == 0) {
       myDevice.CapMeasMode = constrain((byte) cmdStr2Num(args[2], 10), 1, 2);
@@ -355,8 +370,8 @@ void set_cmd(uint8_t arg_cnt, char **args) {
       cmdOK = 1;
     }
   } else if (arg_cnt > 3) {
-    //** >>> FOR TEST PURPOSE ONLY! DO NOT USE WHILE CHARGING! DO NOT USE ON US and UK cars, as they work with 32A max<<< **
-    //** >>> with entering [-yes] you ACCEPT ALL CONSEQUENCES AND THE USAGE IS SOLEY AT YOUR OWN RISK! <<< **
+    //** >>> FOR TEST PURPOSE ONLY! DO NOT USE WHILE CHARGING! DO NOT USE ON US and UK cars, as they already work with 32A max<<< **
+    //** >>> with entering [set ac_max 20 -yes] you ACCEPT ALL CONSEQUENCES AND THE USAGE IS SOLEY AT YOUR OWN RISK! <<< **
     //** >>> LOSS OF WARRANTY, DAMAGE(s), VIOLATION OF REGULATIVE RULES, NO LIABILITY FOR THIS SOFTWARE - SEE LICENSE STATEMENT! <<< **
     if (OBL.OBL7KW && (BMS.KeyState == 0) && strcmp(args[1], "ac_max") == 0 && strcmp(args[3], "-yes") == 0) {
       OBL.newAmps_setpoint = constrain((byte) cmdStr2Num(args[2], 10), 6, 20);
@@ -475,7 +490,7 @@ void tcu_sub (uint8_t arg_cnt, char **args) {
 //! \brief   Logging data. Call queryfunctions and output the data
 //--------------------------------------------------------------------------------
 void logdata(){
-  byte bms_sel[] = {BMSstate, BMSsoc, BMSlimit, BMSexp, BMSbal};
+  byte bms_sel[] = {BMSstate, BMSsoc, BMSlimit, BMSbal};
   getState_BMS(bms_sel, sizeof(bms_sel));
   getOBLdata();
 
@@ -483,7 +498,12 @@ void logdata(){
     //Print Header
     Serial.println();
     Serial.print(F("dt/s: "));Serial.println(myDevice.timer);
-    Serial.println(F("#;SOC;rSOC,av;min;max;kWh;A;kW;V;Vc,min;max;Bal;L1/V;L1/A;HV/V;HV/A;R1/kW;R2/kW;Ti/C;Tint/C;To/C;Tc/C"));
+    Serial.print(F("#;SOC;rSOC,av;min;max;kWh;A;kW;V;Vc,min;max;Bal;"));
+    if (!FASTCHG) {
+      Serial.println(F("L1/V;L1/A;HV/V;HV/A;R1/kW;R2/kW;Ti/C;Tint/C;To/C;Tc/C"));
+    } else {
+      Serial.println(F("L1/V;L1/A;L2/V;L2/A;L3/V;L3/A;Pi/kW;HV/V;HV/A;Ts/%;Th/C;Tc/C"));
+    }
   }
   myDevice.logCount++;
   //Print logged values
@@ -503,16 +523,30 @@ void logdata(){
   Serial.print(BMS.CV_Range.min); Serial.print(CSV);
   Serial.print(BMS.CV_Range.max); Serial.print(CSV);
   Serial.print(BMS.BattBalState, HEX); Serial.print(CSV);
-  Serial.print(OBL.MainsVoltage[0] / 10.0, 1); Serial.print(CSV);
-  Serial.print((OBL.MainsAmps[0] + OBL.MainsAmps[1]) / 10.0, 1); Serial.print(CSV);
-  Serial.print(OBL.DC_HV / 10.0, 1); Serial.print(CSV);
-  Serial.print(OBL.DC_Current / 10.0, 1); Serial.print(CSV);
-  Serial.print(OBL.CHGpower[0] / 2000.0, 3); Serial.print(CSV);
-  Serial.print(OBL.CHGpower[1] / 2000.0, 3); Serial.print(CSV);
-  Serial.print(OBL.InTemp - TEMP_OFFSET, DEC); Serial.print(CSV);
-  Serial.print(OBL.InternalTemp - TEMP_OFFSET, DEC); Serial.print(CSV);
-  Serial.print(OBL.OutTemp - TEMP_OFFSET, DEC); Serial.print(CSV);
-  Serial.print(OBL.CoolantTemp - TEMP_OFFSET + 10, DEC);
+  if (!FASTCHG) {
+    Serial.print(OBL.MainsVoltage[0] / 10.0, 1); Serial.print(CSV);
+    Serial.print((OBL.MainsAmps[0] + OBL.MainsAmps[1]) / 10.0, 1); Serial.print(CSV);
+    Serial.print(OBL.DC_HV / 10.0, 1); Serial.print(CSV);
+    Serial.print(OBL.DC_Current / 10.0, 1); Serial.print(CSV);
+    Serial.print(OBL.CHGpower[0] / 2000.0, 3); Serial.print(CSV);
+    Serial.print(OBL.CHGpower[1] / 2000.0, 3); Serial.print(CSV);
+    Serial.print(OBL.InTemp - TEMP_OFFSET, DEC); Serial.print(CSV);
+    Serial.print(OBL.InternalTemp - TEMP_OFFSET, DEC); Serial.print(CSV);
+    Serial.print(OBL.OutTemp - TEMP_OFFSET, DEC); Serial.print(CSV);
+    Serial.print(OBL.CoolantTemp - TEMP_OFFSET + 10, DEC);
+  } else {
+    Serial.print(OBL.MainsVoltage[0] / 2.0, 1); Serial.print(CSV);
+    Serial.print(OBL.MainsAmps[0] / 10.0, 1); Serial.print(CSV);
+    Serial.print(OBL.MainsVoltage[1] / 2.0, 1); Serial.print(CSV);
+    Serial.print(OBL.MainsAmps[1] / 10.0, 1); Serial.print(CSV);
+    Serial.print(OBL.MainsVoltage[2] / 2.0, 1); Serial.print(CSV);
+    Serial.print(OBL.MainsAmps[2] / 10.0, 1); Serial.print(CSV);
+    Serial.print(OBL.CHGpower[0] / 1000.0, 3); Serial.print(CSV);
+    Serial.print(OBL.DC_HV / 10.0, 1); Serial.print(CSV);
+    Serial.print(OBL.DC_Current / 10.0, 2); Serial.print(CSV);
+    Serial.print(OBL.SysTemp, DEC); Serial.print(CSV);
+    Serial.print(OBL.InternalTemp - TEMP_OFFSET + 10, DEC); Serial.print(CSV);
+    Serial.print(OBL.CoolantTemp - TEMP_OFFSET + 10, DEC);
+  }
   Serial.println();
 }
-
